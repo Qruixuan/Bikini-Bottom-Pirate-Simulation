@@ -12,8 +12,7 @@ There are three agent types:
 * Naval assets (green): patrol along or near the transit corridor, and if they receive a distress call from an attacked ship within their response radius, they attempt to intervene and rescue.
   
 The interaction rules include pursuit, attack, distress signaling, naval response, and possible rescue. The outcome of each encounter is probabilistic and depends on:
----
 (a) merchant ship speed, (b) vigilance/crew alertness, (c) distance to the nearest navy asset at the moment of attack, and (d) whether the ship is traveling inside a naval-protected corridor.
 This agent-based approach allows us to generate synthetic “voyage outcomes” under different security policies (e.g. with/without the corridor, stronger/weaker naval presence). We can then compare scenario-level statistics — such as attack attempt rate, hijack success rate, and safe arrival rate — in a controlled way.
----
+
 
