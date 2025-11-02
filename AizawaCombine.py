@@ -306,22 +306,22 @@ class PirateAgent(Agent):
     def step(self):
         hours = self.model.hours_per_step
 
-        # 只在攻击阶段检查是否遭遇海军，其余阶段忽略
-        if self.state == self.STATE_ATTACK:
-            if hasattr(self.model, "schedule") and self.pos is not None:
-                for agent in self.model.schedule.agents:
-                    if agent.__class__.__name__ == "NavyAgent" and agent.pos is not None:
-                        dnavy = distance(self.pos, agent.pos)
-                        if dnavy < self.visibility:
-                            self._trigger_return(reason="navy_during_attack")
-                            return
-
-        # 航行步数计数与上限检查
-        if self.state in (self.STATE_CRUISE, self.STATE_SEARCH, self.STATE_PURSUIT, self.STATE_ATTACK):
-            self.sailing_steps += 1
-            if self.sailing_steps >= self.max_sailing_steps:
-                self._trigger_return(reason="max_sailing_steps")
-                return
+        # ① 先检查警戒区（港口、海军基地）
+        if hasattr(self.model, "guard_zones") and self.pos is not None:
+            for gz in self.model.guard_zones:
+                if distance(self.pos, gz["center"]) <= gz["radius"]:
+                    # 记录一个事件可选
+                    if hasattr(self.model, "events"):
+                        self.model.events.append((
+                            "PIRATE_BOUNCED",
+                            self.unique_id,
+                            gz["label"],
+                            float(self.pos[0]),
+                            float(self.pos[1]),
+                        ))
+                    # 触发你已有的回港逻辑
+                    self._trigger_return(reason=f"enter_guard_zone:{gz['label']}")
+                    return
 
         # 状态机
         if self.state == self.STATE_SELECT:
@@ -590,6 +590,36 @@ class NavyAgent(Agent):
         except Exception:
             pass
 
+    def can_accept_mission(self, pos: tuple[float, float]) -> bool:
+        """
+        判断当前海军是否可以接受新的任务。
+        参数:
+            pos: 任务目标的位置 (x, y)
+        返回:
+            True  -> 可以接受任务
+            False -> 暂时无法接受
+        """
+        # 如果当前状态是待命 → 可以直接接
+        if self.state == "idle":
+            return True
+
+        # 如果当前状态是执行任务中 → 不可接
+        if self.state == "to_target":
+            return False
+
+        # 如果正在返航
+        if self.state == "rtb":
+            # 计算距离基地的距离
+            dist_to_base = distance(self.pos_f, self.base_pos)
+            # 估算返航油量阈值（剩余步数必须 > 往返消耗）
+            if self.steps_left > dist_to_base / (self.speed * self.model.hours_per_step):
+                return True  # 还有油，能接任务
+            else:
+                return False  # 油不够，必须先回去加油
+
+        # 其他未知状态默认不接任务
+        return False
+
     # ------------------ 主逻辑 ------------------
     def step(self):
         hours = self.model.hours_per_step
@@ -705,11 +735,8 @@ class NavalSimModel(Model):
         # -------- 航线还是原来的 --------
         port_A = (20, 20)
         port_B = (width - 20, height - 20)
-        port_C = (width // 2, height // 2)
         routes = [
-            [port_A, port_B, port_A],
-            [port_B, port_C, port_A, port_B],
-            [port_A, port_C, port_B],
+            [port_A, port_B]
         ]
 
         # 1) 商船（不动）
@@ -753,6 +780,12 @@ class NavalSimModel(Model):
 
         # 存航线，画图用
         self.routes_template = routes
+        # Part A和B的警戒区
+        self.guard_zones = [
+            {"center": port_A, "radius": 25.0, "label": "PORT_A"},
+            {"center": port_B, "radius": 25.0, "label": "PORT_B"},
+            {"center": (100, 150), "radius": 25.0, "label": "NAVY_BASE"},
+        ]
 
     def step(self):
         # 更新海军位置给海盗看
@@ -821,6 +854,23 @@ def run_and_plot(steps=200):
         elif agent_id.startswith("navy_"):
             ax.plot(xs, ys, color='blue', linewidth=2.0, label='Navy' if 'Navy' not in ax.get_legend_handles_labels()[1] else "")
             ax.scatter(xs[0], ys[0], color='blue', s=30, marker='s')
+    # 画警戒区
+    if hasattr(model, "guard_zones"):
+        for gz in model.guard_zones:
+            circle = plt.Circle(gz["center"], gz["radius"],
+                                edgecolor="orange",
+                                facecolor="none",
+                                linestyle="--",
+                                linewidth=1.2,
+                                alpha=0.8)
+            ax.add_patch(circle)
+            # 标个字，方便你看哪个是哪个
+            ax.text(gz["center"][0], gz["center"][1],
+                    gz["label"],
+                    color="orange",
+                    fontsize=8,
+                    ha="center",
+                    va="center")
 
     ax.set_xlim(0, model.space.x_max)
     ax.set_ylim(0, model.space.y_max)
