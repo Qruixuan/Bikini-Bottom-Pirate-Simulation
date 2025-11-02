@@ -352,11 +352,17 @@ class PirateAgent(Agent):
         home_sigma = getattr(self, "home_sigma", 200.0)
         grid = getattr(self.model, "merchant_density_grid", None)
 
+        # 海军基地和港口列表
+        navy_bases = [n.base_pos for n in getattr(self.model, "navy_agents", []) if hasattr(n, "base_pos")]
+        # 把港口拆成单独点
+        port_positions = self.model.ports if hasattr(self.model, "ports") else []
+
         if grid and len(grid) > 0:
             merged = {}
             for cell_pos, val in grid.items():
                 weight = float(val)
-                # 偏向 home_anchor
+
+                # 1. 偏向 home_anchor
                 if anchor is not None:
                     dx = cell_pos[0] - anchor[0]
                     dy = cell_pos[1] - anchor[1]
@@ -364,6 +370,14 @@ class PirateAgent(Agent):
                     sigma = max(1e-6, float(home_sigma))
                     home_factor = math.exp(- (d * d) / (2.0 * sigma * sigma))
                     weight *= home_factor
+
+                # 2. 避开海军基地和港口（距离越近，权重越低）
+                avoid_factor = 1.0
+                for nb in navy_bases + port_positions:
+                    d_nb = math.hypot(cell_pos[0] - nb[0], cell_pos[1] - nb[1])
+                    avoid_factor *= math.exp(- (50.0 / (d_nb + 1e-6)) ** 2)  # 50可调节影响范围
+                weight *= avoid_factor
+
                 merged[cell_pos] = max(weight, 0.0)
 
             total = sum(merged.values())
@@ -381,6 +395,7 @@ class PirateAgent(Agent):
                         self.target_cell = pos
                         break
         else:
+            # fallback 随机生成
             if anchor is not None:
                 sigma = max(1e-6, float(home_sigma))
                 x = random.gauss(anchor[0], sigma)
@@ -390,6 +405,7 @@ class PirateAgent(Agent):
                 x = random.uniform(0, self.model.space.x_max)
                 y = random.uniform(0, self.model.space.y_max)
                 self.target_cell = (x, y)
+
         self.sailing_steps = 0
         self.state = self.STATE_CRUISE
 
@@ -742,6 +758,7 @@ class NavalSimModel(Model):
             [port_A, point_navy, port_B],
             [port_A, point_parit, port_B],
         ]
+        self.ports = [port_A, port_B]
 
         # 1) 商船（不动）
         for i in range(num_merchants):
@@ -861,9 +878,8 @@ class NavalSimModel(Model):
 
                 density_grid[(x, y)] = density
 
-        self.merchant_density_grid = density_grid
-
-
+        self.merchant_density_grid = density_grid        
+    
 # ============================================================
 # 模拟 + 画图
 # ============================================================
