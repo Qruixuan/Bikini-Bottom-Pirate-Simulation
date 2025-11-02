@@ -17,6 +17,10 @@ from mesa import Agent, Model
 from mesa.space import ContinuousSpace
 from mesa.time import RandomActivation
 
+import matplotlib
+# 强制 Matplotlib 使用 'TkAgg' 后端，这是最标准的 GUI 后端之一
+matplotlib.use('TkAgg')
+
 
 # ============================================================
 # 通用工具

@@ -37,7 +37,7 @@ class MerchantAgent(Agent):
         self.current_route_index = 0
         self.wait_timer = 0.0
         self.awareness = False
-        self.under_attack = False
+        self.under_attack = False  # [新增] 攻击状态旗帜
         self.last_known_pirate_pos = None
 
     # --- 辅助方法 ---
@@ -53,7 +53,7 @@ class MerchantAgent(Agent):
         移动逻辑（已修正边界限制和移除检查）。
         此方法将钳制新位置，确保它不会超出 ContinuousSpace 的边界。
         """
-        # 【最终修正点 1：检查 Agent 是否仍在空间中】
+        # 调度同步安全检查：如果 Agent 已被移除，则 self.pos 为 None
         if self.pos is None:
             return False
 
@@ -88,12 +88,13 @@ class MerchantAgent(Agent):
         return arrived
 
     def receive_distress(self, pirate_pos):
-        """响应求救信号，供海盗调用."""
+        """响应求救信号，供海盗调用. (保留此方法，尽管功能已由 _send_distress_call 替代)"""
         pass
 
     def step(self):
         hours = self.model.hours_per_step
 
+        # 调度安全检查
         if self not in self.model.schedule.agents:
             return
 
@@ -103,8 +104,9 @@ class MerchantAgent(Agent):
         if self.state == self.STATE_SAILING:
             if pirate_threat:
                 self.state = self.STATE_EVADING
-                self.under_attack = True  # <--- [新增] 发现威胁，标记为被攻击
+                self.under_attack = True
                 self.last_known_pirate_pos = pirate_threat
+                self._send_distress_call()  # [新增] 发送求救信号
             else:
                 self._sail_route(hours)
 
@@ -112,19 +114,35 @@ class MerchantAgent(Agent):
             if pirate_threat:
                 self.last_known_pirate_pos = pirate_threat
                 self._evade(hours)
+                self._send_distress_call()  # [新增] 持续发送求救信号
             else:
+                # 威胁解除，切换回航行状态
                 self.state = self.STATE_SAILING
-                self.under_attack = False  # <--- [新增] 威胁解除，标记为安全
+                self.under_attack = False
                 self.last_known_pirate_pos = None
+
+                # --- 【智能返航：选择最近的剩余航点作为新目标】 ---
+                remaining_route = self.route[self.current_route_index:]
+                if remaining_route:
+                    # 找到当前位置离哪个剩余航点最近
+                    closest_index = min(
+                        range(len(remaining_route)),
+                        key=lambda i: distance(self.pos, remaining_route[i])
+                    )
+                    # 将下一个目标点更新为这个最近点
+                    self.current_route_index += closest_index
+                # ----------------------------------------------------
+
                 self._sail_route(hours)
 
         elif self.state == self.STATE_IN_PORT:
             self._wait_in_port(hours)
-            self.under_attack = False  # <--- [新增] 在港口视为安全
+            self.under_attack = False
 
     # --- 内部行为方法 ---
 
     def _check_pirate_threat(self):
+        # ... (代码不变) ...
         closest_pirate_pos = None
         min_distance = float('inf')
 
@@ -159,7 +177,7 @@ class MerchantAgent(Agent):
     def _evade(self, hours):
         if self.last_known_pirate_pos is None or self.pos is None:
             self.state = self.STATE_SAILING
-            self.under_attack = False
+            self.under_attack = False  # 确保清除状态
             return
 
         pirate_pos = self.last_known_pirate_pos
@@ -172,23 +190,20 @@ class MerchantAgent(Agent):
         d = math.hypot(dx, dy)
         if d == 0: return
 
+        # 计算远离海盗的逃跑目的地
         escape_dest = (self.pos[0] + dx / d * escape_distance, self.pos[1] + dy / d * escape_distance)
 
         self._move_towards(escape_dest, self.evasion_speed, hours)
-
-        self._send_distress_call()
 
     def _send_distress_call(self):
         """扫描军舰，并向最近的军舰发送求救信号."""
         closest_navy = None
         min_dist = float('inf')
 
-        # 遍历所有 Agent 找到军舰
-        # 注意：这里假设 NavyAgent 是从 model 导入的，或者直接通过类名字符串判断
         for agent in self.model.schedule.agents:
-            # 假设军舰类名为 'Navy'
+            # 使用类名字符串 'Navy' 进行判断
             if agent.__class__.__name__ == 'Navy':
-                # 军舰的连续位置存储在 pos_f 中
+                # 军舰的连续位置存储在 pos_f 中 (根据您的 Navy Agent 逻辑)
                 navy_pos = getattr(agent, "pos_f", None)
                 if navy_pos:
                     d = distance(self.pos, navy_pos)
