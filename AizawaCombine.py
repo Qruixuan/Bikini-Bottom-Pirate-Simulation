@@ -244,7 +244,7 @@ class MerchantAgent(Agent):
                 navy_pos = getattr(agent, "pos_f", None)
                 if navy_pos:
                     d = distance(self.pos, navy_pos)
-                    if d < min_dist:
+                    if d < min_dist and agent.can_accept_mission(self.pos):
                         min_dist = d
                         closest_navy = agent
 
@@ -545,7 +545,7 @@ class NavyAgent(Agent):
                  speed: float = 40.0,
                  armament: float = 1.0,
                  base_pos: Tuple[float, float] | None = None,
-                 max_steps: int = 100):
+                 max_steps: int = 200):
         super().__init__(unique_id, model)
         self.speed = speed
         self.armament = armament
@@ -735,8 +735,12 @@ class NavalSimModel(Model):
         # -------- 航线还是原来的 --------
         port_A = (20, 20)
         port_B = (width - 20, height - 20)
+        point_navy = (135, 120)
+        point_parit = (175, 75)
         routes = [
-            [port_A, port_B]
+            [port_A, port_B],
+            [port_A, point_navy, port_B],
+            [port_A, point_parit, port_B],
         ]
 
         # 1) 商船（不动）
