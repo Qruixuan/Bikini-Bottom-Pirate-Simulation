@@ -159,31 +159,53 @@ class PirateAgent(Agent):
             self.state = self.STATE_RETURN
 
     def _pursue(self, hours):
+        """追击商船，如果发现海军则逃跑"""
         if self.current_target_merchant is None:
             self.state = self.STATE_SEARCH
             return
 
-        if self.current_target_merchant.state == MerchantAgent.STATE_IN_PORT:
+        merchant = self.current_target_merchant
+
+        # 如果商船在港口则放弃追击
+        if merchant.state == MerchantAgent.STATE_IN_PORT:
             self.state = self.STATE_SEARCH
-            self.current_target_merchant = None  # 清除目标
+            self.current_target_merchant = None
             return
 
-        merchant_pos = self.current_target_merchant.pos
-        # 【关键修正点 1：检查商船位置是否为 None】
+        merchant_pos = merchant.pos
         if merchant_pos is None:
             self.state = self.STATE_SEARCH
-            self.current_target_merchant = None  # 清除目标
+            self.current_target_merchant = None
             return
 
+        # ✅ 检查是否有海军在视野内
+        nearest_navy = None
+        nearest_navy_dist = float("inf")
+        for agent in self.model.schedule.agents:
+            # 用类名判断，不强依赖 NavyAgent 定义
+            if agent.__class__.__name__ == "NavyAgent":
+                if agent.pos is None:
+                    continue
+                d = distance(self.pos, agent.pos)
+                if d < self.visibility and d < nearest_navy_dist:
+                    nearest_navy_dist = d
+                    nearest_navy = agent
+
+        if nearest_navy:
+            print(f"⚓ Pirate {self.unique_id} spotted navy at {nearest_navy_dist:.1f} nm → retreating!")
+            # 立刻中止追击，返回基地
+            self.current_target_merchant = None
+            self.state = self.STATE_RETURN
+            return
+
+        # 如果安全，继续追击
         self._move_towards(merchant_pos, self.pursuit_speed, hours)
 
+        # 如果到达目标附近，准备攻击
         if distance(self.pos, merchant_pos) <= 0.2:
-            merchant = self.current_target_merchant
-
             if merchant.awareness or merchant.state == MerchantAgent.STATE_EVADING:
                 merchant.awareness = True
                 merchant.receive_distress(self.pos)
-
             self.state = self.STATE_ATTACK
             self.attack_timer = 0.0
 
