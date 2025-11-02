@@ -3,6 +3,7 @@ from typing import Tuple
 from mesa import Model, Agent
 from mesa.space import ContinuousSpace
 from mesa.time import RandomActivation
+from MerchantShip import MerchantAgent
 
 
 # --- Utility function ---
