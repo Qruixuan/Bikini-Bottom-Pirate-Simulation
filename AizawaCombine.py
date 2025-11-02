@@ -478,7 +478,7 @@ class PirateAgent(Agent):
             for agent in self.model.schedule.agents:
                 if agent.__class__.__name__ == "NavyAgent" and agent.pos is not None:
                     dnavy = distance(self.pos, agent.pos)
-                    if dnavy < self.visibility:
+                    if dnavy < 0.5*self.visibility:
                         print(f"⚓ Pirate {self.unique_id} spotted Navy during attack! Retreating!")
                         self._trigger_return(reason="navy_during_attack")
                         return
