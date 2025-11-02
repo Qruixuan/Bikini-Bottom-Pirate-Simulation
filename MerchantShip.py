@@ -207,7 +207,7 @@ class MerchantAgent(Agent):
                 navy_pos = getattr(agent, "pos_f", None)
                 if navy_pos:
                     d = distance(self.pos, navy_pos)
-                    if d < min_dist:
+                    if d < min_dist and agent.can_accept_mission(self.pos):
                         min_dist = d
                         closest_navy = agent
 
