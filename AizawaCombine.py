@@ -74,10 +74,8 @@ class MerchantAgent(Agent):
         self.current_route_index = 0
         self.wait_timer = 0.0
         self.awareness = False
+        self.under_attack = False  # [新增] 攻击状态旗帜
         self.last_known_pirate_pos = None
-
-        # 给海军看的标志（来自 NavyAgent 模式）:contentReference[oaicite:4]{index=4}
-        self.under_attack = False
 
     # --- 辅助方法 ---
 
@@ -92,6 +90,7 @@ class MerchantAgent(Agent):
         移动逻辑（已修正边界限制和移除检查）。
         此方法将钳制新位置，确保它不会超出 ContinuousSpace 的边界。
         """
+        # 调度同步安全检查：如果 Agent 已被移除，则 self.pos 为 None
         if self.pos is None:
             return False
 
@@ -107,13 +106,18 @@ class MerchantAgent(Agent):
         else:
             new_pos = (cur[0] + dx / d * step, cur[1] + dy / d * step)
 
-        # 边界
-        x_max = getattr(self.model.space, 'x_max', self.model.space.width)
-        y_max = getattr(self.model.space, 'y_max', self.model.space.height)
+        # --- 边界钳制/限制 ---
+        x_max = getattr(self.model.space, 'x_max', 1000)
+        y_max = getattr(self.model.space, 'y_max', 1000)
+
+        # 钳制新位置，确保它不会超出 [0, max] 范围
         clamped_x = max(0.0, min(new_pos[0], x_max))
         clamped_y = max(0.0, min(new_pos[1], y_max))
-        final_pos = (clamped_x, clamped_y)
 
+        final_pos = (clamped_x, clamped_y)
+        # ----------------------
+
+        # 如果船被边界限制停住，则视为未到达目标
         if final_pos != new_pos:
             arrived = False
 
@@ -121,18 +125,15 @@ class MerchantAgent(Agent):
         return arrived
 
     def receive_distress(self, pirate_pos):
-        """
-        商船发现/遭遇海盗时触发，标记自己 under_attack，
-        并通知所有海军（如果模型里有）:contentReference[oaicite:5]{index=5}
-        """
-        self.under_attack = True
-        self.last_known_pirate_pos = pirate_pos
-        if hasattr(self.model, "navy_agents"):
-            for n in self.model.navy_agents:
-                n.receive_distress(self)
+        """响应求救信号，供海盗调用. (保留此方法，尽管功能已由 _send_distress_call 替代)"""
+        pass
 
     def step(self):
         hours = self.model.hours_per_step
+
+        # 调度安全检查
+        if self not in self.model.schedule.agents:
+            return
 
         # 1. 检查附近海盗并更新警戒
         pirate_threat = self._check_pirate_threat()
@@ -140,7 +141,9 @@ class MerchantAgent(Agent):
         if self.state == self.STATE_SAILING:
             if pirate_threat:
                 self.state = self.STATE_EVADING
+                self.under_attack = True
                 self.last_known_pirate_pos = pirate_threat
+                self._send_distress_call()  # [新增] 发送求救信号
             else:
                 self._sail_route(hours)
 
@@ -148,26 +151,40 @@ class MerchantAgent(Agent):
             if pirate_threat:
                 self.last_known_pirate_pos = pirate_threat
                 self._evade(hours)
+                self._send_distress_call()  # [新增] 持续发送求救信号
             else:
-                # 没威胁了，恢复航行
+                # 威胁解除，切换回航行状态
                 self.state = self.STATE_SAILING
-                self.last_known_pirate_pos = None
                 self.under_attack = False
+                self.last_known_pirate_pos = None
+
+                # --- 【智能返航：选择最近的剩余航点作为新目标】 ---
+                remaining_route = self.route[self.current_route_index:]
+                if remaining_route:
+                    # 找到当前位置离哪个剩余航点最近
+                    closest_index = min(
+                        range(len(remaining_route)),
+                        key=lambda i: distance(self.pos, remaining_route[i])
+                    )
+                    # 将下一个目标点更新为这个最近点
+                    self.current_route_index += closest_index
+                # ----------------------------------------------------
+
                 self._sail_route(hours)
 
         elif self.state == self.STATE_IN_PORT:
             self._wait_in_port(hours)
+            self.under_attack = False
 
     # --- 内部行为方法 ---
 
     def _check_pirate_threat(self):
+        # ... (代码不变) ...
         closest_pirate_pos = None
         min_distance = float('inf')
 
         for agent in self.model.schedule.agents:
             if agent.__class__.__name__ == 'PirateAgent':
-                if agent.pos is None:
-                    continue
                 d = distance(self.pos, agent.pos)
 
                 if d <= self.visibility:
@@ -197,34 +214,50 @@ class MerchantAgent(Agent):
     def _evade(self, hours):
         if self.last_known_pirate_pos is None or self.pos is None:
             self.state = self.STATE_SAILING
-            self.under_attack = False
+            self.under_attack = False  # 确保清除状态
             return
 
         pirate_pos = self.last_known_pirate_pos
         dx, dy = self.pos[0] - pirate_pos[0], self.pos[1] - pirate_pos[1]
 
-        x_max = getattr(self.model.space, 'x_max', self.model.space.width)
-        y_max = getattr(self.model.space, 'y_max', self.model.space.height)
+        x_max = getattr(self.model.space, 'x_max', 1000)
+        y_max = getattr(self.model.space, 'y_max', 1000)
         escape_distance = x_max + y_max
 
         d = math.hypot(dx, dy)
-        if d == 0:
-            return
+        if d == 0: return
 
+        # 计算远离海盗的逃跑目的地
         escape_dest = (self.pos[0] + dx / d * escape_distance, self.pos[1] + dy / d * escape_distance)
 
         self._move_towards(escape_dest, self.evasion_speed, hours)
 
-        # 逃跑时继续呼救
-        self.receive_distress(pirate_pos)
+    def _send_distress_call(self):
+        """扫描军舰，并向最近的军舰发送求救信号."""
+        closest_navy = None
+        min_dist = float('inf')
+
+        for agent in self.model.schedule.agents:
+            # 使用类名字符串 'Navy' 进行判断
+            if agent.__class__.__name__ == 'Navy':
+                # 军舰的连续位置存储在 pos_f 中 (根据您的 Navy Agent 逻辑)
+                navy_pos = getattr(agent, "pos_f", None)
+                if navy_pos:
+                    d = distance(self.pos, navy_pos)
+                    if d < min_dist:
+                        min_dist = d
+                        closest_navy = agent
+
+        # 如果找到军舰，发送求救信号
+        if closest_navy:
+            # 军舰的 receive_distress 需要传入商船自身对象
+            closest_navy.receive_distress(self)
 
     def _wait_in_port(self, hours):
         self.wait_timer += hours
         if self.wait_timer >= self.port_wait_time:
             self.current_route_index = 0
             self.state = self.STATE_SAILING
-            self.under_attack = False
-
 
 # ============================================================
 # 海盗（用你 pirate.py 的复杂 FSM 版）:contentReference[oaicite:6]{index=6}
