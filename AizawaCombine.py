@@ -10,14 +10,17 @@ AizawaCombine.py
 import math
 import random
 from typing import Tuple, List, Dict
+import numpy as np
 
 import matplotlib.pyplot as plt
 
 from mesa import Agent, Model
 from mesa.space import ContinuousSpace
 from mesa.time import RandomActivation
-EPS = 1e-3
+import matplotlib.animation as animation
 
+EPS = 1e-3
+ani = None
 
 # ============================================================
 # 通用工具
@@ -355,7 +358,6 @@ class PirateAgent(Agent):
             max(0.0, min(cur[0] + jitter_x, max_x)),
             max(0.0, min(cur[1] + jitter_y, max_y)),
         )
-        self.model.space.move_agent(self, new_pos)
         self.model.space.move_agent(self, new_pos)
 
         # 找商船
@@ -727,7 +729,87 @@ def run_and_plot(steps=200):
 
     plt.tight_layout()
     plt.show()
+def run_and_animate(steps=200, interval=100):
+    global ani
 
+    model = NavalSimModel(num_pirates=3, num_merchants=6, num_navy=1,
+                          width=300, height=200,
+                          hours_per_step=1/6)
+    for _ in range(steps):
+        model.step()
+
+    print("Hijacks:", model.hijack_count)
+    print("Events:", model.events)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.set_xlim(0, model.space.x_max)
+    ax.set_ylim(0, model.space.y_max)
+    ax.set_aspect('equal', adjustable='box')
+    ax.set_title("Maritime ABM Animation")
+    ax.set_xlabel("X (nm)")
+    ax.set_ylabel("Y (nm)")
+    ax.grid(True, linestyle=':', alpha=0.3)
+
+    # 先画静态航线（你现在看到的就是这个）
+    for route in model.routes_template:
+        xs = [p[0] for p in route]
+        ys = [p[1] for p in route]
+        ax.plot(xs, ys, linestyle='--', color='lightgreen', linewidth=1, alpha=0.4)
+
+    lines = {}
+    scatters = {}
+    max_len = 0
+    for agent_id, traj in model.trajectories.items():
+        max_len = max(max_len, len(traj))
+        if agent_id.startswith("merchant_"):
+            color, z = "green", 3
+        elif agent_id.startswith("pirate_"):
+            color, z = "red", 4
+        else:
+            color, z = "blue", 5
+
+        line, = ax.plot([], [], color=color, linewidth=1.5, alpha=0.9, zorder=z)
+        sc = ax.scatter([], [], color=color, s=30, zorder=z+1)
+        lines[agent_id] = line
+        scatters[agent_id] = sc
+
+    def init():
+        for line in lines.values():
+            line.set_data([], [])
+        for sc in scatters.values():
+            # scatter 要二维的
+            sc.set_offsets(np.empty((0, 2)))
+        return list(lines.values()) + list(scatters.values())
+
+    def update(frame):
+        artists = []
+        for agent_id, traj in model.trajectories.items():
+            # 正常情况每条轨迹长度都差不多，但有的agent可能被劫走了
+            last_idx = min(frame, len(traj) - 1)
+            xs = [p[0] for p in traj[:last_idx+1]]
+            ys = [p[1] for p in traj[:last_idx+1]]
+            lines[agent_id].set_data(xs, ys)
+            scatters[agent_id].set_offsets(np.array([[traj[last_idx][0], traj[last_idx][1]]]))
+            artists.append(lines[agent_id])
+            artists.append(scatters[agent_id])
+        return artists
+
+    ani = animation.FuncAnimation(
+        fig,
+        update,
+        frames=max_len,
+        init_func=init,
+        interval=interval,
+        blit=False,         # 关键：先关掉 blit
+        repeat=False
+    )
+
+    plt.tight_layout()
+    plt.show()
 
 if __name__ == "__main__":
+    # 想要静态图
     run_and_plot(steps=250)
+
+    # 想要动画
+    # run_and_animate(steps=250, interval=120)
