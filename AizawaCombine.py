@@ -816,6 +816,49 @@ class NavalSimModel(Model):
                 self.trajectories[agent.unique_id] = []
             self.trajectories[agent.unique_id].append(agent.pos)
 
+    def compute_merchant_density_grid(self, grid_resolution: float = 5.0, sigma: float = 20.0):
+        """
+        根据商船航线生成 merchant_density_grid。
+        
+        grid_resolution: 网格间距 (nm)
+        sigma: 高斯衰减距离参数 (越大越平滑)
+        """
+        width, height = self.space.x_max, self.space.y_max
+        x_bins = np.arange(0, width + grid_resolution, grid_resolution)
+        y_bins = np.arange(0, height + grid_resolution, grid_resolution)
+
+        density_grid: Dict[Tuple[float, float], float] = {}
+
+        for x in x_bins:
+            for y in y_bins:
+                point = np.array([x, y])
+                density = 0.0
+
+                # 遍历所有商船航线
+                for m in self.merchant_agents:
+                    route = m.route
+                    for i in range(len(route) - 1):
+                        p1 = np.array(route[i])
+                        p2 = np.array(route[i + 1])
+
+                        # 计算 point 到线段 p1-p2 的最短距离
+                        line_vec = p2 - p1
+                        p_vec = point - p1
+                        line_len = np.linalg.norm(line_vec)
+                        if line_len == 0:
+                            dist = np.linalg.norm(p_vec)
+                        else:
+                            t = np.clip(np.dot(p_vec, line_vec) / (line_len**2), 0.0, 1.0)
+                            proj = p1 + t * line_vec
+                            dist = np.linalg.norm(point - proj)
+
+                        # 高斯衰减
+                        density += np.exp(-(dist**2) / (2 * sigma**2))
+
+                density_grid[(x, y)] = density
+
+        self.merchant_density_grid = density_grid
+
 
 # ============================================================
 # 模拟 + 画图
@@ -824,6 +867,8 @@ def run_and_plot(steps=200):
     model = NavalSimModel(num_pirates=3, num_merchants=6, num_navy=1,
                           width=300, height=200,
                           hours_per_step=1/6)
+    
+    model.compute_merchant_density_grid(grid_resolution=5.0, sigma=20.0)
 
     for t in range(steps):
         model.step()
