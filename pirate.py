@@ -24,7 +24,7 @@ class PirateAgent(Agent):
             cruising_speed_kn=10,
             pursuit_speed_kn=28,
             endurance_days=14,
-            visibility_nm=10000,
+            visibility_nm=80,
             attack_time_hrs=0.5,
             cool_down_hrs=2,
             navy_knowledge_prob=0.4,
