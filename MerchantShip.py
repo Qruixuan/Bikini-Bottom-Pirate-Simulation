@@ -37,6 +37,7 @@ class MerchantAgent(Agent):
         self.current_route_index = 0
         self.wait_timer = 0.0
         self.awareness = False
+        self.under_attack = False
         self.last_known_pirate_pos = None
 
     # --- 辅助方法 ---
@@ -93,7 +94,6 @@ class MerchantAgent(Agent):
     def step(self):
         hours = self.model.hours_per_step
 
-        # 【修正点 2：调度安全检查】如果 Agent 不在调度器中，立即停止运行
         if self not in self.model.schedule.agents:
             return
 
@@ -103,6 +103,7 @@ class MerchantAgent(Agent):
         if self.state == self.STATE_SAILING:
             if pirate_threat:
                 self.state = self.STATE_EVADING
+                self.under_attack = True  # <--- [新增] 发现威胁，标记为被攻击
                 self.last_known_pirate_pos = pirate_threat
             else:
                 self._sail_route(hours)
@@ -113,11 +114,13 @@ class MerchantAgent(Agent):
                 self._evade(hours)
             else:
                 self.state = self.STATE_SAILING
+                self.under_attack = False  # <--- [新增] 威胁解除，标记为安全
                 self.last_known_pirate_pos = None
                 self._sail_route(hours)
 
         elif self.state == self.STATE_IN_PORT:
             self._wait_in_port(hours)
+            self.under_attack = False  # <--- [新增] 在港口视为安全
 
     # --- 内部行为方法 ---
 
@@ -156,6 +159,7 @@ class MerchantAgent(Agent):
     def _evade(self, hours):
         if self.last_known_pirate_pos is None or self.pos is None:
             self.state = self.STATE_SAILING
+            self.under_attack = False
             return
 
         pirate_pos = self.last_known_pirate_pos
@@ -172,7 +176,30 @@ class MerchantAgent(Agent):
 
         self._move_towards(escape_dest, self.evasion_speed, hours)
 
-        self.receive_distress(pirate_pos)
+        self._send_distress_call()
+
+    def _send_distress_call(self):
+        """扫描军舰，并向最近的军舰发送求救信号."""
+        closest_navy = None
+        min_dist = float('inf')
+
+        # 遍历所有 Agent 找到军舰
+        # 注意：这里假设 NavyAgent 是从 model 导入的，或者直接通过类名字符串判断
+        for agent in self.model.schedule.agents:
+            # 假设军舰类名为 'Navy'
+            if agent.__class__.__name__ == 'Navy':
+                # 军舰的连续位置存储在 pos_f 中
+                navy_pos = getattr(agent, "pos_f", None)
+                if navy_pos:
+                    d = distance(self.pos, navy_pos)
+                    if d < min_dist:
+                        min_dist = d
+                        closest_navy = agent
+
+        # 如果找到军舰，发送求救信号
+        if closest_navy:
+            # 军舰的 receive_distress 需要传入商船自身对象
+            closest_navy.receive_distress(self)
 
     def _wait_in_port(self, hours):
         self.wait_timer += hours
