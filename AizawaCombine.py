@@ -592,7 +592,7 @@ class NavalSimModel(Model):
         # 轨迹记录：id -> list of (x,y)
         self.trajectories: Dict[str, List[Tuple[float, float]]] = {}
 
-        # -------- 航线随便造几条 --------
+        # -------- 航线还是原来的 --------
         port_A = (20, 20)
         port_B = (width - 20, height - 20)
         port_C = (width // 2, height // 2)
@@ -602,7 +602,7 @@ class NavalSimModel(Model):
             [port_A, port_C, port_B],
         ]
 
-        # 1) 商船
+        # 1) 商船（不动）
         for i in range(num_merchants):
             route = random.choice(routes)
             start_pos = route[0]
@@ -620,20 +620,20 @@ class NavalSimModel(Model):
             self.merchant_agents.append(m)
             self.trajectories[m.unique_id] = [start_pos]
 
-        # 2) 海盗（用复杂版）
+        # 2) 海盗 —— 按你说的范围生成：x 150~300, y 0~75
         for i in range(num_pirates):
-            home = (random.uniform(width * 0.6, width * 0.9),
-                    random.uniform(height * 0.2, height * 0.8))
+            home_x = random.uniform(150, width)       # width=300 → 150~300
+            home_y = random.uniform(0, 75)            # 0~75
+            home = (home_x, home_y)
             p = PirateAgent(f"pirate_{i}", self, home_anchor=home,
                             visibility_nm=60)
             self.space.place_agent(p, home)
             self.schedule.add(p)
             self.trajectories[p.unique_id] = [home]
 
-        # 3) 海军
+        # 3) 海军 —— 固定在 (100, 150)
         for i in range(num_navy):
-            eps = 0.001
-            base = (0.0, height - eps)
+            base = (100, 150)
             n = NavyAgent(f"navy_{i}", self, base_pos=base)
             n.pos_f = base
             self.space.place_agent(n, base)
@@ -641,8 +641,23 @@ class NavalSimModel(Model):
             self.navy_agents.append(n)
             self.trajectories[n.unique_id] = [base]
 
-        # 把 routes 存起来，方便画
+        # 存航线，画图用
         self.routes_template = routes
+
+    def step(self):
+        # 更新海军位置给海盗看
+        self.navy_positions = [n.pos for n in self.navy_agents]
+
+        self.schedule.step()
+
+        # 记录轨迹
+        for agent in list(self.schedule.agents):
+            if agent.pos is None:
+                continue
+            if agent.unique_id not in self.trajectories:
+                self.trajectories[agent.unique_id] = []
+            self.trajectories[agent.unique_id].append(agent.pos)
+
 
     def step(self):
         # 更新海军位置给海盗避让用
