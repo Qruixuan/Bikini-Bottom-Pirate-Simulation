@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from mesa import Agent, Model
 from mesa.space import ContinuousSpace
 from mesa.time import RandomActivation
+EPS = 1e-3
 
 import matplotlib
 # 强制 Matplotlib 使用 'TkAgg' 后端，这是最标准的 GUI 后端之一
@@ -352,10 +353,13 @@ class PirateAgent(Agent):
         self.search_time += hours
         cur = self.pos
         jitter_x, jitter_y = random.uniform(-1, 1), random.uniform(-1, 1)
+        max_x = self.model.space.x_max - EPS
+        max_y = self.model.space.y_max - EPS
         new_pos = (
-            max(0, min(self.model.space.x_max, cur[0] + jitter_x)),
-            max(0, min(self.model.space.y_max, cur[1] + jitter_y)),
+            max(0.0, min(cur[0] + jitter_x, max_x)),
+            max(0.0, min(cur[1] + jitter_y, max_y)),
         )
+        self.model.space.move_agent(self, new_pos)
         self.model.space.move_agent(self, new_pos)
 
         # 找商船
