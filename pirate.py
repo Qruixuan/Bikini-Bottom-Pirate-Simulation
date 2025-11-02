@@ -3,29 +3,8 @@ from typing import Tuple
 from mesa import Model, Agent
 from mesa.space import ContinuousSpace
 from mesa.time import RandomActivation
-from MerchantShip import MerchantAgent
-
-
-# --- Utility function ---
-def distance(a: Tuple[float, float], b: Tuple[float, float]) -> float:
-    return math.hypot(a[0] - b[0], a[1] - b[1])
-
-
-# --- Minimal merchant placeholder ---
-class MerchantAgent(Agent):
-    """A minimal dummy merchant for testing PirateAgent."""
-    def __init__(self, unique_id, model, speed_kn=12, alertness=0.5):
-        super().__init__(unique_id, model)
-        self.speed_kn = speed_kn
-        self.alertness = alertness
-        self.awareness = False
-
-    def step(self):
-        # keep stationary for simplicity
-        pass
-
-    def receive_distress(self, pirate_pos):
-        print(f"🚨 Merchant {self.unique_id} distress at {self.pos}, pirate at {pirate_pos}")
+# 导入 MerchantAgent 类和 distance 函数
+from MerchantShip import MerchantAgent, distance
 
 
 # --- Pirate Agent ---
@@ -40,16 +19,16 @@ class PirateAgent(Agent):
     STATE_RETURN = "return_home"
 
     def __init__(
-        self, unique_id, model,
-        home_anchor=(0, 0),
-        cruising_speed_kn=10,
-        pursuit_speed_kn=28,
-        endurance_days=14,
-        visibility_nm=10000,
-        attack_time_hrs=0.5,
-        cool_down_hrs=2,
-        navy_knowledge_prob=0.4,
-        qa=0.2, qu=0.5
+            self, unique_id, model,
+            home_anchor=(0, 0),
+            cruising_speed_kn=10,
+            pursuit_speed_kn=28,
+            endurance_days=14,
+            visibility_nm=10000,
+            attack_time_hrs=0.5,
+            cool_down_hrs=2,
+            navy_knowledge_prob=0.4,
+            qa=0.2, qu=0.5
     ):
         super().__init__(unique_id, model)
         self.home_anchor = home_anchor
@@ -118,15 +97,35 @@ class PirateAgent(Agent):
         self.state = self.STATE_CRUISE
 
     def _move_towards(self, dest, speed_kn, hours):
+        """
+        移动逻辑（已修正边界限制）。
+        此方法将钳制新位置，确保它不会超出 ContinuousSpace 的边界。
+        """
+        # 增加防御性检查：如果当前位置或目标位置为 None，则不移动
+        if self.pos is None or dest is None:
+            return
+
         step = speed_kn * hours
         cur = self.pos
         dx, dy = dest[0] - cur[0], dest[1] - cur[1]
         d = math.hypot(dx, dy)
+
         if d <= step or d == 0:
             new_pos = dest
         else:
             new_pos = (cur[0] + dx / d * step, cur[1] + dy / d * step)
-        self.model.space.move_agent(self, new_pos)
+
+        # --- 边界钳制/限制 ---
+        x_max = getattr(self.model.space, 'x_max', 1000)
+        y_max = getattr(self.model.space, 'y_max', 1000)
+
+        # 钳制新位置，确保它不会超出 [0, max] 范围
+        clamped_x = max(0.0, min(new_pos[0], x_max))
+        clamped_y = max(0.0, min(new_pos[1], y_max))
+        final_pos = (clamped_x, clamped_y)
+        # --------------------------------
+
+        self.model.space.move_agent(self, final_pos)
 
     def _cruise(self, hours):
         if self.target_cell is None:
@@ -163,14 +162,28 @@ class PirateAgent(Agent):
         if self.current_target_merchant is None:
             self.state = self.STATE_SEARCH
             return
+
+        if self.current_target_merchant.state == MerchantAgent.STATE_IN_PORT:
+            self.state = self.STATE_SEARCH
+            self.current_target_merchant = None  # 清除目标
+            return
+
         merchant_pos = self.current_target_merchant.pos
+        # 【关键修正点 1：检查商船位置是否为 None】
+        if merchant_pos is None:
+            self.state = self.STATE_SEARCH
+            self.current_target_merchant = None  # 清除目标
+            return
+
         self._move_towards(merchant_pos, self.pursuit_speed, hours)
+
         if distance(self.pos, merchant_pos) <= 0.2:
             merchant = self.current_target_merchant
-            spotted = random.random() < min(1.0, merchant.alertness * hours)
-            if spotted:
+
+            if merchant.awareness or merchant.state == MerchantAgent.STATE_EVADING:
                 merchant.awareness = True
                 merchant.receive_distress(self.pos)
+
             self.state = self.STATE_ATTACK
             self.attack_timer = 0.0
 
@@ -178,20 +191,38 @@ class PirateAgent(Agent):
         self.attack_timer += hours
         if self.attack_timer >= self.attack_time:
             merchant = self.current_target_merchant
-            s = merchant.speed_kn
+
+            if merchant not in self.model.schedule.agents:
+                self.state = self.STATE_RECUP
+                self.cooldown_timer = 0.0
+                self.current_target_merchant = None  # 清除引用
+                return
+
+            s = merchant.normal_speed
             m_base = 10.0
             pa = max(0.0, (2.0 - s / m_base) * self.qa)
             pu = max(0.0, (2.0 - s / m_base) * self.qu)
+
             prob = pa if merchant.awareness else pu
+
             if random.random() < prob:
                 self.model.hijack_count += 1
                 print(f"💀 Pirate {self.unique_id} hijacked {merchant.unique_id}!")
                 try:
                     self.model.schedule.remove(merchant)
+                    merchant.pos = None
+
+                    self.state = self.STATE_RECUP
+                    self.cooldown_timer = 0.0
+                    self.current_target_merchant = None  # 劫持成功，清除引用
+                    return
                 except Exception:
                     pass
+
+            # 无论劫持成功与否，战斗结束后清除目标并进入恢复状态
             self.state = self.STATE_RECUP
             self.cooldown_timer = 0.0
+            self.current_target_merchant = None  # 战斗结束，清除引用
 
     def _recuperate(self, hours):
         self.cooldown_timer += hours
@@ -207,62 +238,3 @@ class PirateAgent(Agent):
         if distance(self.pos, self.home_anchor) < 1.0:
             self.time_since_departure = 0.0
             self.state = self.STATE_SELECT
-
-
-# --- Minimal test model ---
-class PirateOnlyModel(Model):
-    """A minimal Mesa 2.x model for testing PirateAgent."""
-    def __init__(self, width=300, height=200, num_pirates=1, hours_per_step=1):
-        super().__init__()
-        self.space = ContinuousSpace(width, height, torus=False)
-        self.schedule = RandomActivation(self)
-        self.hours_per_step = hours_per_step
-        self.hijack_count = 0
-        self.attack_count = 0
-        self.merchant_density_grid = {(100, 100): 5, (200, 120): 2}
-        self.navy_positions = []
-
-        # add one merchant
-        merchant = MerchantAgent("merchant_1", self)
-        self.space.place_agent(merchant, (100, 100))
-        self.schedule.add(merchant)
-
-        # add pirates
-        for i in range(num_pirates):
-            home = (random.uniform(10, width * 0.2), random.uniform(0, height))
-            pirate = PirateAgent(f"pirate_{i}", self, home_anchor=home)
-            self.space.place_agent(pirate, home)
-            self.schedule.add(pirate)
-
-    def step(self):
-        self.schedule.step()
-
-
-# --- Run a quick simulation ---
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-
-    model = PirateOnlyModel(width=300, height=200, num_pirates=1)
-    pirate = [a for a in model.schedule.agents if isinstance(a, PirateAgent)][0]
-
-    pirate_positions = []
-    for step in range(100):
-        model.step()
-        pirate_positions.append(pirate.pos)
-        if step % 10 == 0:
-            print(f"Step {step:03d}: state={pirate.state}, pos={pirate.pos}")
-
-    print("\n✅ Simulation finished.")
-    print(f"Final state: {pirate.state}")
-    print(f"Hijack count: {model.hijack_count}")
-
-    xs, ys = zip(*pirate_positions)
-    plt.figure(figsize=(6, 4))
-    plt.plot(xs, ys, 'r-', label="Pirate trajectory")
-    plt.scatter(xs[0], ys[0], c='blue', label="Start (home)")
-    plt.title("Pirate-only simulation (Mesa 2.x)")
-    plt.xlabel("X position")
-    plt.ylabel("Y position")
-    plt.legend()
-    plt.grid(True)
-    plt.show()

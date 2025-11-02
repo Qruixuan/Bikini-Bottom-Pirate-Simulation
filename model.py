@@ -1,10 +1,15 @@
 # naval_model.py
 
+import matplotlib
+# 强制 Matplotlib 使用 'TkAgg' 后端，这是最标准的 GUI 后端之一
+matplotlib.use('TkAgg')
+
 import math, random
 from typing import Tuple, List
 from mesa import Model
 from mesa.space import ContinuousSpace
 from mesa.time import RandomActivation
+import matplotlib.pyplot as plt
 
 # --- 导入 Agent 类 ---
 # 假设 MerchantShip.py 中包含了 MerchantAgent 和 distance 函数
@@ -20,7 +25,7 @@ from pirate import PirateAgent
 class NavalSimModel(Model):
     """海盗和商船模拟模型."""
 
-    def __init__(self, width=300, height=200, num_pirates=3, num_merchants=5, hours_per_step=1):
+    def __init__(self, width=300, height=200, num_pirates=3, num_merchants=10, hours_per_step=1):
         super().__init__()
         self.space = ContinuousSpace(width, height, torus=False)
         self.schedule = RandomActivation(self)
@@ -34,16 +39,14 @@ class NavalSimModel(Model):
         self.hijack_count = 0
 
         # 全局地图信息
-        # 海盗根据这个网格来选择目标区域
         self.merchant_density_grid = {(200, 150): 5, (50, 50): 3}
-        self.navy_positions = []  # 预留给军舰位置
+        self.navy_positions = []
 
-        # --- 1. 定义航线 (Port 1 <-> Port 2 <-> Port 3) ---
+        # --- 1. 定义航线 ---
         port_A = (20, 20)
         port_B = (width - 20, height - 20)
         port_C = (width // 2, height // 2)
 
-        # 航线定义 (循环)
         route_1 = [port_A, port_B, port_A]
         route_2 = [port_B, port_C, port_A, port_B]
         self.all_routes = [route_1, route_2]
@@ -51,7 +54,6 @@ class NavalSimModel(Model):
         # --- 2. 添加商船 ---
         for i in range(num_merchants):
             route = random.choice(self.all_routes)
-            # 确保商船从航线起点开始
             start_pos = route[0] if route else (width / 2, height / 2)
 
             merchant = MerchantAgent(
@@ -68,17 +70,14 @@ class NavalSimModel(Model):
 
         # --- 3. 添加海盗 ---
         for i in range(num_pirates):
-            # 海盗基地设在地图一角
             home = (random.uniform(10, width * 0.1), random.uniform(0, height * 0.2))
             pirate = PirateAgent(f"pirate_{i}", self, home_anchor=home)
             self.space.place_agent(pirate, home)
             self.schedule.add(pirate)
 
     def step(self):
-        # 每次步进都随机执行所有 Agent 的 step
         self.schedule.step()
 
-        # 模拟结束条件：所有商船都被抢劫
         merchant_count = sum(1 for a in self.schedule.agents if isinstance(a, MerchantAgent))
         if merchant_count == 0 and len(self.schedule.agents) > 0:
             self.running = False
@@ -89,8 +88,6 @@ class NavalSimModel(Model):
 # ====================================================================
 
 if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-
     # --- 模拟参数 ---
     SIM_STEPS = 500
     GRID_WIDTH = 300
@@ -105,10 +102,13 @@ if __name__ == "__main__":
     )
 
     # --- 数据收集 ---
+    pirate_agents = [a for a in model.schedule.agents if isinstance(a, PirateAgent)]
+    merchant_agents = [a for a in model.schedule.agents if isinstance(a, MerchantAgent)]
+
     data_collector = {
         "step": [],
-        "pirate_positions": {p.unique_id: [] for p in model.schedule.agents if isinstance(p, PirateAgent)},
-        "merchant_positions": {m.unique_id: [] for m in model.schedule.agents if isinstance(m, MerchantAgent)},
+        "pirate_positions": {p.unique_id: [] for p in pirate_agents},
+        "merchant_positions": {m.unique_id: [] for m in merchant_agents},
         "hijacks": []
     }
 
@@ -140,13 +140,15 @@ if __name__ == "__main__":
     for pid, positions in data_collector["pirate_positions"].items():
         if positions:
             xs, ys = zip(*positions)
-            plt.plot(xs, ys, '-', alpha=0.6, linewidth=2, label=f"Pirate {pid}")
+            plt.plot(xs, ys, '-', alpha=0.6, linewidth=2,
+                     label=f"Pirate {pid}" if pid == pirate_agents[0].unique_id else None)
 
-    # 绘制商船轨迹 (只绘制存活的，或直到被移除)
+    # 绘制商船轨迹
     for mid, positions in data_collector["merchant_positions"].items():
         if positions:
             xs, ys = zip(*positions)
-            plt.plot(xs, ys, '--', alpha=0.4, linewidth=1, label=f"Merchant {mid}" if mid == "merchant_0" else None)
+            plt.plot(xs, ys, '--', alpha=0.4, linewidth=1,
+                     label=f"Merchant {mid}" if mid == merchant_agents[0].unique_id else None)
 
     # 绘制起始点/港口
     plt.scatter(20, 20, c='green', marker='s', s=100, label="Port A")
