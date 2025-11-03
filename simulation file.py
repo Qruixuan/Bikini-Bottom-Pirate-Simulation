@@ -273,5 +273,5 @@ if __name__ == "__main__":
     # 你可以按需打开
     # experiment_channel(num_runs=100)
     # experiment_navy(num_runs=100)
-    experiment_evasion_only(num_runs=20)
-    # experiment_alert_only(num_runs=20)
+    # experiment_evasion_only(num_runs=100)
+    experiment_alert_only(num_runs=100)

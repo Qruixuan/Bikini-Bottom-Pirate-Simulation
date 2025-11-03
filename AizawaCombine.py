@@ -275,7 +275,7 @@ class PirateAgent(Agent):
             self, unique_id, model,
             home_anchor=(0, 0),
             cruising_speed_kn=10,
-            pursuit_speed_kn=28,
+            pursuit_speed_kn=30,
             max_sailing_steps=100,
             visibility_nm=150,
             attack_time_hrs=0.5,
