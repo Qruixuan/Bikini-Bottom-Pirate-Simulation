@@ -57,7 +57,7 @@ class MerchantAgent(Agent):
             route: List[Tuple[float, float]],
             normal_speed_kn=12,
             evasion_speed_kn=18,
-            visibility_nm=1000,
+            visibility_nm=50,
             alert_param=1,
             port_wait_time_hrs=5.0
     ):
@@ -524,7 +524,7 @@ class PirateAgent(Agent):
             for agent in self.model.schedule.agents:
                 if agent.__class__.__name__ == "NavyAgent" and agent.pos is not None:
                     dnavy = distance(self.pos, agent.pos)
-                    if dnavy < 0.5*self.visibility:
+                    if dnavy < self.navy_knowledge*self.visibility:
                         print(f"⚓ Pirate {self.unique_id} spotted Navy during attack! Retreating!")
                         self._trigger_return(reason="navy_during_attack")
                         return
@@ -561,11 +561,12 @@ class PirateAgent(Agent):
                         float(self.pos[1]),
                     ))
 
-                print(f"💀 Pirate {self.unique_id} hijacked {merchant.unique_id} at {self.pos}! Navy{merchant.assigned_navy.unique_id} at {merchant.assigned_navy.pos} {merchant.assigned_navy.state}!")
+                print(f"💀 Pirate {self.unique_id} hijacked {merchant.unique_id}")
 
                 # ✅ 从调度器和商船列表里都删掉
-                merchant.assigned_navy.state = 'rtb'
-                merchant.assigned_navy.target = None
+                if merchant.assigned_navy:
+                    merchant.assigned_navy.state = 'rtb'
+                    merchant.assigned_navy.target = None
                 self.model.schedule.remove(merchant)
                 merchant.pos = None
                 if hasattr(self.model, "merchant_agents"):
@@ -606,7 +607,7 @@ class NavyAgent(Agent):
     - 每艘船有 max_steps 的最大航行步数，耗尽后必须先回基地加油
     """
     def __init__(self, unique_id, model,
-                 speed: float = 40,
+                 speed: float = 60,
                  armament: float = 1.0,
                  base_pos: Tuple[float, float] | None = None,
                  # max_steps: int = 400):
@@ -794,8 +795,8 @@ class NavalSimModel(Model):
     def __init__(self,
                  width=300, height=200,
                  num_pirates=6,
-                 num_merchants=9,
-                 num_navy=0,
+                 num_merchants=10,
+                 num_navy=1,
                  hours_per_step=1/6):
         super().__init__()
         self.space = ContinuousSpace(width, height, torus=False)
@@ -840,7 +841,7 @@ class NavalSimModel(Model):
                 normal_speed_kn=random.uniform(10, 14),
                 evasion_speed_kn=random.uniform(16, 20),
                 visibility_nm=15,
-                alert_param=0.03
+                alert_param=1
             )
             self.space.place_agent(m, start_pos)
             self.schedule.add(m)

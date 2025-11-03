@@ -1,4 +1,7 @@
 import random
+random_numbers = []
+for i in range(300):
+    random_numbers.append(random.randint(1, 10000))
 # experiment_runner.py
 """
 批量跑海盗-商船-海军仿真，用来回答 3.1 / 3.2 / 3.3 三个研究问题。
@@ -17,8 +20,8 @@ from AizawaCombine import NavalSimModel  # 直接用你现在的模型:contentRe
 
 def run_one_simulation(
     steps=400,
-    num_pirates=9,
-    num_merchants=6,
+    num_pirates=6,
+    num_merchants=10,
     num_navy=1,
     mode="open",
     evasion_choices=None,     # ← 只控制“逃逸速度”
@@ -152,11 +155,12 @@ def experiment_channel(num_runs=100):
     rows = []
     for mode in ["open", "mixed"]:
         for i in range(num_runs):
+            random.seed(random_numbers[i % 300])
             res = run_one_simulation(
                 steps=400,
                 num_pirates=6,
-                num_merchants=9,
-                num_navy=9,
+                num_merchants=10,
+                num_navy=1,
                 mode=mode,
             )
             rows.append({
@@ -177,12 +181,13 @@ def experiment_channel(num_runs=100):
 # =============== 实验 2：海军数量 ===============
 def experiment_navy(num_runs=100):
     rows = []
-    for navy in [0, 1, 2, 3]:
+    for navy in [1, 4, 7, 10]:
         for i in range(num_runs):
+            random.seed(random_numbers[i % 300])
             res = run_one_simulation(
                 steps=400,
-                num_pirates=9,
-                num_merchants=6,
+                num_pirates=6,
+                num_merchants=10,
                 num_navy=navy,
                 mode="open",   # 固定用集中航道，容易看出海军效果
             )
@@ -208,6 +213,7 @@ def experiment_evasion_only(num_runs=20):
     baseline_alert = 0.0                   # 固定警戒度
 
     for i in range(num_runs):
+        random.seed(random_numbers[i % 300])
         res = run_one_simulation(
             steps=400,
             num_pirates=9,
@@ -241,10 +247,11 @@ def experiment_alert_only(num_runs=20):
     baseline_evasion = 18                  # 固定逃逸速度（单位与模型一致）
 
     for i in range(num_runs):
+        random.seed(random_numbers[i % 300])
         res = run_one_simulation(
             steps=400,
-            num_pirates=9,
-            num_merchants=6,
+            num_pirates=6,
+            num_merchants=10,
             num_navy=1,
             mode="open",
             evasion_choices=None,              # ← 不随机速度
@@ -270,7 +277,7 @@ def experiment_alert_only(num_runs=20):
 
 if __name__ == "__main__":
     # 你可以按需打开
-    experiment_channel(num_runs=200)
-    # experiment_navy(num_runs=100)
-    # experiment_evasion_only(num_runs=200)
+    # experiment_channel(num_runs=300)
+    # experiment_navy(num_runs=300)
+    experiment_evasion_only(num_runs=200)
     # experiment_alert_only(num_runs=1000)
