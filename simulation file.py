@@ -110,11 +110,10 @@ def run_one_simulation(
     events = model.events
     hijacks = [e for e in events if e[0] == "HIJACK"]
     disrupts = [e for e in events if e[0] == "DISRUPT"]
-    attempts = [e for e in events if e[0] in ("HIJACK", "DISRUPT")]
+    attempt_count = getattr(model, "attempt_count", 0)
 
     hijack_count = len(hijacks)
     disrupt_count = len(disrupts)
-    attempt_count = len(attempts)
     hijack_rate = hijack_count / attempt_count if attempt_count > 0 else 0.0
 
     hijacked_ids = {e[2] for e in hijacks}
@@ -155,9 +154,9 @@ def experiment_channel(num_runs=100):
         for i in range(num_runs):
             res = run_one_simulation(
                 steps=400,
-                num_pirates=9,
-                num_merchants=6,
-                num_navy=1,
+                num_pirates=6,
+                num_merchants=9,
+                num_navy=9,
                 mode=mode,
             )
             rows.append({
@@ -271,7 +270,7 @@ def experiment_alert_only(num_runs=20):
 
 if __name__ == "__main__":
     # 你可以按需打开
-    # experiment_channel(num_runs=100)
+    experiment_channel(num_runs=200)
     # experiment_navy(num_runs=100)
-    # experiment_evasion_only(num_runs=100)
-    experiment_alert_only(num_runs=100)
+    # experiment_evasion_only(num_runs=200)
+    # experiment_alert_only(num_runs=1000)

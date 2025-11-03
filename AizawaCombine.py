@@ -57,8 +57,8 @@ class MerchantAgent(Agent):
             route: List[Tuple[float, float]],
             normal_speed_kn=12,
             evasion_speed_kn=18,
-            visibility_nm=8,
-            alert_param=0.05,
+            visibility_nm=1000,
+            alert_param=1,
             port_wait_time_hrs=5.0
     ):
         super().__init__(unique_id, model)
@@ -68,6 +68,8 @@ class MerchantAgent(Agent):
         self.visibility = visibility_nm
         self.alert_param = alert_param
         self.port_wait_time = port_wait_time_hrs
+        self.assigned_navy = None
+        # self.assigned_pirate = []
 
         # 状态管理
         self.state = self.STATE_SAILING
@@ -151,24 +153,33 @@ class MerchantAgent(Agent):
             if pirate_threat:
                 self.last_known_pirate_pos = pirate_threat
                 self._evade(hours)
-                self._send_distress_call()  # [新增] 持续发送求救信号
+                if self.assigned_navy is None:
+                    self._send_distress_call()  # [新增] 持续发送求救信号
             else:
-                # 威胁解除，切换回航行状态
-                self.state = self.STATE_SAILING
-                self.under_attack = False
-                self.last_known_pirate_pos = None
+                isOK = True
+                for agent in self.model.schedule.agents:
+                    if agent.__class__.__name__ == 'PirateAgent':
+                        d = distance(self.pos, agent.pos)
+                        if d <= self.visibility:
+                            isOK = False
+                            break
+                if isOK:
+                    # 威胁解除，切换回航行状态
+                    self.state = self.STATE_SAILING
+                    self.under_attack = False
+                    self.last_known_pirate_pos = None
 
-                # --- 【智能返航：选择最近的剩余航点作为新目标】 ---
-                remaining_route = self.route[self.current_route_index:]
-                if remaining_route:
-                    # 找到当前位置离哪个剩余航点最近
-                    closest_index = min(
-                        range(len(remaining_route)),
-                        key=lambda i: distance(self.pos, remaining_route[i])
-                    )
-                    # 将下一个目标点更新为这个最近点
-                    self.current_route_index += closest_index
-                # ----------------------------------------------------
+                    # --- 【智能返航：选择最近的剩余航点作为新目标】 ---
+                    remaining_route = self.route[self.current_route_index:]
+                    if remaining_route:
+                        # 找到当前位置离哪个剩余航点最近
+                        closest_index = min(
+                            range(len(remaining_route)),
+                            key=lambda i: distance(self.pos, remaining_route[i])
+                        )
+                        # 将下一个目标点更新为这个最近点
+                        self.current_route_index += closest_index
+                    # ----------------------------------------------------
 
                 self._sail_route(hours)
 
@@ -188,14 +199,19 @@ class MerchantAgent(Agent):
                 d = distance(self.pos, agent.pos)
 
                 if d <= self.visibility:
-                    alert_threshold = 1.0 - d * self.alert_param
-                    alert_threshold = max(0.0, min(1.0, alert_threshold))
+                    if d == 0:
+                        alert_threshold = 1
+                    else:
+                        alert_threshold = 1.0 - self.alert_param / d
+                        alert_threshold = max(0.0, min(1.0, alert_threshold))
 
                     if random.random() < alert_threshold:
+                        # self.assigned_pirate.append(agent)
                         if d < min_distance:
                             min_distance = d
                             closest_pirate_pos = agent.pos
                             self.awareness = True
+
 
         return closest_pirate_pos
 
@@ -208,6 +224,7 @@ class MerchantAgent(Agent):
             if self.current_route_index >= len(self.route):
                 if self.route:
                     self.state = self.STATE_IN_PORT
+                    self.assign_navy = None
                 else:
                     self.state = self.STATE_SAILING
 
@@ -233,24 +250,36 @@ class MerchantAgent(Agent):
         self._move_towards(escape_dest, self.evasion_speed, hours)
 
     def _send_distress_call(self):
-        """扫描军舰，并向最近的军舰发送求救信号."""
+        """扫描军舰，并向最近的可用军舰发送求救信号（一对一分配）。"""
+        # 已经被分配过就别重复分配
+        if getattr(self, "assigned_navy", None) is not None:
+            # 如果 assigned_navy 已经被移除或无效，清理它
+            an = self.assigned_navy
+            if an is None or not hasattr(an, "unique_id") or an not in self.model.schedule.agents:
+                self.assigned_navy = None
+            else:
+                return  # 已经被某艘舰分配，直接返回
+
         closest_navy = None
         min_dist = float('inf')
 
         for agent in self.model.schedule.agents:
-            # 使用类名字符串 'Navy' 进行判断
-            if agent.__class__.__name__ == 'Navy':
-                # 军舰的连续位置存储在 pos_f 中 (根据您的 Navy Agent 逻辑)
-                navy_pos = getattr(agent, "pos_f", None)
+            # 正确的类名判断
+            if agent.__class__.__name__ == 'NavyAgent':
+                navy_pos = getattr(agent, "pos", None)
                 if navy_pos:
                     d = distance(self.pos, navy_pos)
-                    if d < min_dist and agent.can_accept_mission(self.pos):
-                        min_dist = d
-                        closest_navy = agent
+                    # 只有能接任务且没有被其他商船分配到的海军才考虑
+                    if agent.can_accept_mission(self.pos) and getattr(agent, "target", None) is None:
+                        if d < min_dist:
+                            min_dist = d
+                            closest_navy = agent
 
-        # 如果找到军舰，发送求救信号
+        # 如果找到合适的海军，发信号并且记录 assigned_navy
         if closest_navy:
-            # 军舰的 receive_distress 需要传入商船自身对象
+            print(f'merchant:{self.unique_id},navy:{closest_navy.unique_id}')
+            self.assigned_navy = closest_navy
+            # 双向标记最好在 navy.receive_distress 里再做一次（见下）
             closest_navy.receive_distress(self)
 
     def _wait_in_port(self, hours):
@@ -258,6 +287,7 @@ class MerchantAgent(Agent):
         if self.wait_timer >= self.port_wait_time:
             self.current_route_index = 0
             self.state = self.STATE_SAILING
+            self.wait_timer = 0
 
 # ============================================================
 # 海盗（用你 pirate.py 的复杂 FSM 版）:contentReference[oaicite:6]{index=6}
@@ -275,13 +305,13 @@ class PirateAgent(Agent):
             self, unique_id, model,
             home_anchor=(0, 0),
             cruising_speed_kn=10,
-            pursuit_speed_kn=30,
+            pursuit_speed_kn=28,
             max_sailing_steps=100,
-            visibility_nm=150,
+            visibility_nm=60,
             attack_time_hrs=0.5,
             cool_down_hrs=2,
             navy_knowledge_prob=0.4,
-            qa=0.2, qu=0.5
+            qa=0.6, qu=0.9
     ):
         super().__init__(unique_id, model)
         self.home_anchor = home_anchor
@@ -344,8 +374,8 @@ class PirateAgent(Agent):
         self.target_cell = self.home_anchor
         self.state = self.STATE_RETURN
         self.sailing_steps = 0
-        if reason:
-            print(f"→ Pirate {self.unique_id} triggered return due to: {reason}")
+        # if reason:
+            # print(f"→ Pirate {self.unique_id} triggered return due to: {reason}")
 
     def _select_target_area(self):
         anchor = getattr(self, "home_anchor", None)
@@ -455,6 +485,14 @@ class PirateAgent(Agent):
             self.state = self.STATE_RETURN
 
     def _pursue(self, hours):
+        if hasattr(self.model, "schedule") and self.pos is not None:
+            for agent in self.model.schedule.agents:
+                if agent.__class__.__name__ == "NavyAgent" and agent.pos is not None:
+                    dnavy = distance(self.pos, agent.pos)
+                    if dnavy < 0.5*self.visibility:
+                        print(f"⚓ Pirate {self.unique_id} spotted Navy during attack! Retreating!")
+                        self._trigger_return(reason="navy_during_attack")
+                        return
         if self.current_target_merchant is None:
             self.state = self.STATE_SEARCH
             return
@@ -465,10 +503,15 @@ class PirateAgent(Agent):
             return
         self._move_towards(merchant.pos, self.pursuit_speed, hours)
         if distance(self.pos, merchant.pos) <= 0.2:
-            if merchant.awareness or merchant.state == MerchantAgent.STATE_EVADING:
-                merchant.awareness = True
-                merchant.receive_distress(self.pos)
+                # merchant.receive_distress(self.pos)
             self.state = self.STATE_ATTACK
+            if hasattr(self.model, "attempt_count"):
+                self.model.attempt_count += 1
+            else:
+                self.model.attempt_count = 1
+            self.model.events.append(("ATTEMPT", self.unique_id,
+                                      self.current_target_merchant.unique_id,
+                                      float(self.pos[0]), float(self.pos[1])))
             self.attack_timer = 0.0
 
     def _attack(self, hours):
@@ -478,7 +521,7 @@ class PirateAgent(Agent):
             for agent in self.model.schedule.agents:
                 if agent.__class__.__name__ == "NavyAgent" and agent.pos is not None:
                     dnavy = distance(self.pos, agent.pos)
-                    if dnavy < 0.2*self.visibility:
+                    if dnavy < 0.5*self.visibility:
                         print(f"⚓ Pirate {self.unique_id} spotted Navy during attack! Retreating!")
                         self._trigger_return(reason="navy_during_attack")
                         return
@@ -494,16 +537,16 @@ class PirateAgent(Agent):
                 self.current_target_merchant = None
                 return
 
-            # ---- 计算成功概率 ----
-            s = merchant.normal_speed
-            m_base = 10.0
-            pa = max(0.0, (2.0 - s / m_base) * self.qa)
-            pu = max(0.0, (2.0 - s / m_base) * self.qu)
+            # ---- 成功概率 ----
+            pa = self.qa
+            pu = self.qu
             prob = pa if merchant.awareness else pu
 
             if random.random() < prob:
                 # ✅ 劫持成功
                 self.model.hijack_count += 1
+                if not merchant.awareness:
+                    self.model.unawareness_count += 1
 
                 # ✅ 事件记录
                 if hasattr(self.model, "events"):
@@ -515,9 +558,11 @@ class PirateAgent(Agent):
                         float(self.pos[1]),
                     ))
 
-                print(f"💀 Pirate {self.unique_id} hijacked {merchant.unique_id}!")
+                print(f"💀 Pirate {self.unique_id} hijacked {merchant.unique_id} at {self.pos}! Navy{merchant.assigned_navy.unique_id} at {merchant.assigned_navy.pos} {merchant.assigned_navy.state}!")
 
                 # ✅ 从调度器和商船列表里都删掉
+                merchant.assigned_navy.state = 'rtb'
+                merchant.assigned_navy.target = None
                 self.model.schedule.remove(merchant)
                 merchant.pos = None
                 if hasattr(self.model, "merchant_agents"):
@@ -558,15 +603,15 @@ class NavyAgent(Agent):
     - 每艘船有 max_steps 的最大航行步数，耗尽后必须先回基地加油
     """
     def __init__(self, unique_id, model,
-                 speed: float = 40.0,
+                 speed: float = 10000,
                  armament: float = 1.0,
                  base_pos: Tuple[float, float] | None = None,
-                 max_steps: int = 200):
+                 # max_steps: int = 400):
+                 ):
         super().__init__(unique_id, model)
         self.speed = speed
         self.armament = armament
         self.intercept_radius = 1.0
-        self.pos_f = (0.0, 0.0)
         self.target = None
         if base_pos is None:
             base_pos = (0.0, self.model.space.y_max)
@@ -576,30 +621,35 @@ class NavyAgent(Agent):
         self.state = "idle"
 
         # 燃料/步数
-        self.max_steps = max_steps       # 最大能走多少步
-        self.steps_left = max_steps      # 当前还能走多少步
+        # self.max_steps = max_steps       # 最大能走多少步
+        # self.steps_left = max_steps      # 当前还能走多少步
 
     # ------------------ 对外接口：接收求救 ------------------
     def receive_distress(self, merchant: MerchantAgent):
         # 没油了 → 直接忽略这次呼叫
-        if self.steps_left <= 0:
-            return
+        # if self.steps_left <= 0:
+        #     return
 
         if merchant is None or merchant.pos is None:
+            print("$")
             return
         if not getattr(merchant, "under_attack", False):
+            print("&")
             return
 
         # 如果现在没有任务，直接接
         if self.target is None:
             self.target = merchant
+            print(f'{self.unique_id}{self.state}')
             self.state = "to_target"
             return
+        else:
+            print(f'### {self.unique_id}{self.state}')
 
         # 有任务 → 换成离自己更近的那个
         try:
-            old_dist = distance(self.pos_f, self.target.pos)
-            new_dist = distance(self.pos_f, merchant.pos)
+            old_dist = distance(self.pos, self.target.pos)
+            new_dist = distance(self.pos, merchant.pos)
             if new_dist < old_dist:
                 self.target = merchant
                 self.state = "to_target"
@@ -618,15 +668,14 @@ class NavyAgent(Agent):
         # 如果当前状态是待命 → 可以直接接
         if self.state == "idle":
             return True
-
-        # 如果当前状态是执行任务中 → 不可接
-        if self.state == "to_target":
+        else:
+        # 如果当前状态是执行任务中 → 不可接:
             return False
 
         # 如果正在返航
         if self.state == "rtb":
             # 计算距离基地的距离
-            dist_to_base = distance(self.pos_f, self.base_pos)
+            dist_to_base = distance(self.pos, self.base_pos)
             # 估算返航油量阈值（剩余步数必须 > 往返消耗）
             if self.steps_left > dist_to_base / (self.speed * self.model.hours_per_step):
                 return True  # 还有油，能接任务
@@ -642,21 +691,22 @@ class NavyAgent(Agent):
         dist_per_step = self.speed * hours
 
         # ① 没油了 → 不跟你讲道理，直接回去
-        if self.steps_left <= 0 and self.state != "rtb":
-            self.target = None
-            self.state = "rtb"
+        # if self.steps_left <= 0 and self.state != "rtb":
+        #     self.target = None
+        #     self.state = "rtb"
 
         # ② 如果空闲但外面有人在挨打 → 主动出动（前提是有油）
-        if self.state == "idle" and self.steps_left > 0:
-            ua = [m for m in self.model.merchant_agents if getattr(m, "under_attack", False)]
-            if ua:
-                self.target = min(ua, key=lambda m: distance(self.pos_f, m.pos))
-                self.state = "to_target"
+        # if self.state == "idle" and self.steps_left > 0:
+        #     ua = [m for m in self.model.merchant_agents if getattr(m, "under_attack", False)]
+        #     if ua:
+        #         self.target = min(ua, key=lambda m: distance(self.pos, m.pos))
+        #         self.state = "to_target"
 
         # ③ 去救人
         if self.state == "to_target" and self.target is not None:
             # 还没走就发现对方不挨打了 → 回去
             if not getattr(self.target, "under_attack", False):
+                print(f'{self.target.unique_id} is not under attack!')
                 self.target = None
                 self.state = "rtb"
                 self._move_to_base(dist_per_step)
@@ -664,6 +714,7 @@ class NavyAgent(Agent):
 
             target_pos = getattr(self.target, "pos", None)
             if target_pos is None:
+                print(f'{self.target.unique_id}\'s target_pos is None!')
                 # 商船可能被劫持/被删了
                 self.target = None
                 self.state = "rtb"
@@ -671,52 +722,66 @@ class NavyAgent(Agent):
                 return
 
             # 真正去追
-            self.pos_f = step_move(self.pos_f, target_pos, dist_per_step)
-            self.model.space.move_agent(self, self.pos_f)
-            self.steps_left -= 1   # 走一步扣一步
+            self.pos = step_move(self.pos, target_pos, dist_per_step)
+            self.model.space.move_agent(self, self.pos)
+            # self.steps_left -= 1   # 走一步扣一步
 
             # 到达目标附近 → 任务结束，强制回家
-            if distance(self.pos_f, target_pos) <= self.intercept_radius:
-                # 拦截成功就清掉标志
-                if getattr(self.target, "under_attack", False):
-                    self.target.under_attack = False
-                if hasattr(self.model, "events"):
-                    self.model.events.append(("DISRUPT", self.unique_id, self.target.unique_id))
+            if distance(self.pos, target_pos) <= self.intercept_radius:
+                # # 拦截成功就清掉标志
+                # if getattr(self.target, "under_attack", False):
+                #     self.target.under_attack = False
+                #     self.target.assigned_navy = None
+                # if hasattr(self.model, "events"):
+                #     self.model.events.append(("DISRUPT", self.unique_id, self.target.unique_id))
+                # self.target = None
+                # self.state = "rtb"
+                self.target.under_attack = False
+                # self.target.assigned_navy = None
+                self.state = "follow"
+                print(f'{self.unique_id} is {self.state}ing')
+        if self.state == "follow":
+            if self.target.state == MerchantAgent.STATE_IN_PORT:
+                print(f'{self.unique_id} {self.target.unique_id} {self.pos}')
+                self.target.assigned_navy = None
                 self.target = None
                 self.state = "rtb"
+            else:
+                self.pos = self.target.pos
+                self.model.space.move_agent(self, self.pos)
             return
 
         # ④ 回基地
         if self.state == "rtb":
             # 返程途中如果还有油 → 可以被新的求救打断，前提是 steps_left > 0
-            if self.steps_left > 0:
-                ua = [m for m in self.model.merchant_agents if getattr(m, "under_attack", False)]
-                if ua:
-                    # 按你说的：途中又被呼叫 → 再去
-                    closest = min(ua, key=lambda m: distance(self.pos_f, m.pos))
-                    self.target = closest
-                    self.state = "to_target"
-                    return
+            # if self.steps_left > 0:
+            #     ua = [m for m in self.model.merchant_agents if getattr(m, "under_attack", False)]
+            #     if ua:
+            #         # 按你说的：途中又被呼叫 → 再去
+            #         closest = min(ua, key=lambda m: distance(self.pos, m.pos))
+            #         self.target = closest
+            #         self.state = "to_target"
+            #         return
 
             # 正常返航
             self._move_to_base(dist_per_step)
-            self.steps_left -= 1   # 返航也要扣油
+            # self.steps_left -= 1   # 返航也要扣油
 
             # 到家 → 补满油，变 idle
-            if distance(self.pos_f, self.base_pos) < 0.5:
-                self.steps_left = self.max_steps
+            if distance(self.pos, self.base_pos) < 0.5:
+                # self.steps_left = self.max_steps
                 self.state = "idle"
                 self.target = None
             return
 
         # ⑤ idle 原地耗不耗油？不耗
         if self.state == "idle":
-            self.model.space.move_agent(self, self.pos_f)
+            self.model.space.move_agent(self, self.pos)
 
     # ------------------ 辅助 ------------------
     def _move_to_base(self, dist):
-        self.pos_f = step_move(self.pos_f, self.base_pos, dist)
-        self.model.space.move_agent(self, self.pos_f)
+        self.pos = step_move(self.pos, self.base_pos, dist)
+        self.model.space.move_agent(self, self.pos)
 
 # ============================================================
 # 模型：把三种 agent 融合在一起:contentReference[oaicite:8]{index=8}
@@ -725,8 +790,8 @@ class NavyAgent(Agent):
 class NavalSimModel(Model):
     def __init__(self,
                  width=300, height=200,
-                 num_pirates=9,
-                 num_merchants=6,
+                 num_pirates=6,
+                 num_merchants=9,
                  num_navy=1,
                  hours_per_step=1/6):
         super().__init__()
@@ -739,7 +804,8 @@ class NavalSimModel(Model):
 
         self.events: list[tuple] = []
         self.hijack_count = 0
-
+        self.attempt_count = 0
+        self.unawareness_count = 0
         # 给别的 agent 快速访问
         self.merchant_agents: list[MerchantAgent] = []
         self.navy_agents: list[NavyAgent] = []
@@ -793,8 +859,8 @@ class NavalSimModel(Model):
         for i in range(num_navy):
             base = (100, 150)
             n = NavyAgent(f"navy_{i}", self, base_pos=base)
-            n.pos_f = base
-            self.space.place_agent(n, base)
+            n.pos = base
+            # self.space.place_agent(n, base)
             self.schedule.add(n)
             self.navy_agents.append(n)
             self.trajectories[n.unique_id] = [base]
@@ -805,26 +871,13 @@ class NavalSimModel(Model):
         self.guard_zones = [
             {"center": port_A, "radius": 25.0, "label": "PORT_A"},
             {"center": port_B, "radius": 25.0, "label": "PORT_B"},
+            {"center": point_navy, "radius": 10.0, "label": "PORT_C"},
+            {"center": point_pirate, "radius": 10.0, "label": "PORT_D"},
             {"center": (100, 150), "radius": 25.0, "label": "NAVY_BASE"},
         ]
 
     def step(self):
         # 更新海军位置给海盗看
-        self.navy_positions = [n.pos for n in self.navy_agents]
-
-        self.schedule.step()
-
-        # 记录轨迹
-        for agent in list(self.schedule.agents):
-            if agent.pos is None:
-                continue
-            if agent.unique_id not in self.trajectories:
-                self.trajectories[agent.unique_id] = []
-            self.trajectories[agent.unique_id].append(agent.pos)
-
-
-    def step(self):
-        # 更新海军位置给海盗避让用
         self.navy_positions = [n.pos for n in self.navy_agents]
 
         self.schedule.step()
@@ -884,7 +937,7 @@ class NavalSimModel(Model):
 # 模拟 + 画图
 # ============================================================
 def run_and_plot(steps=400):
-    model = NavalSimModel(num_pirates=3, num_merchants=6, num_navy=1,
+    model = NavalSimModel(num_pirates=6, num_merchants=9, num_navy=9,
                           width=300, height=200,
                           hours_per_step=1/6)
     
@@ -947,11 +1000,13 @@ def run_and_plot(steps=400):
     ax.grid(True, linestyle=':', alpha=0.3)
 
     plt.tight_layout()
+    print(model.unawareness_count)
     plt.show()
+
 def run_and_animate(steps=400, interval=100):
     global ani
 
-    model = NavalSimModel(num_pirates=3, num_merchants=6, num_navy=1,
+    model = NavalSimModel(num_pirates=6, num_merchants=9, num_navy=9,
                           width=300, height=200,
                           hours_per_step=1/6)
     for _ in range(steps):
