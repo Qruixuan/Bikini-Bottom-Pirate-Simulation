@@ -464,6 +464,9 @@ class PirateAgent(Agent):
         if distance(self.pos, self.target_cell) < 1.0:
             self.state = self.STATE_SEARCH
             self.search_time = 0.0
+        self.time_since_departure += hours
+        if self.time_since_departure >= self.max_sailing_steps:
+            self.state = self.STATE_RETURN
 
     def _search(self, hours):
         self.search_time += hours
@@ -603,7 +606,7 @@ class NavyAgent(Agent):
     - 每艘船有 max_steps 的最大航行步数，耗尽后必须先回基地加油
     """
     def __init__(self, unique_id, model,
-                 speed: float = 10000,
+                 speed: float = 40,
                  armament: float = 1.0,
                  base_pos: Tuple[float, float] | None = None,
                  # max_steps: int = 400):
@@ -792,7 +795,7 @@ class NavalSimModel(Model):
                  width=300, height=200,
                  num_pirates=6,
                  num_merchants=9,
-                 num_navy=1,
+                 num_navy=0,
                  hours_per_step=1/6):
         super().__init__()
         self.space = ContinuousSpace(width, height, torus=False)
@@ -824,7 +827,7 @@ class NavalSimModel(Model):
             [port_A, point_navy, port_B],
             [port_A, point_pirate, port_B],
         ]
-        self.ports = [port_A, port_B]
+        self.ports = [port_A, port_B, point_navy, point_pirate]
 
         # 1) 商船（不动）
         for i in range(num_merchants):
@@ -844,9 +847,9 @@ class NavalSimModel(Model):
             self.merchant_agents.append(m)
             self.trajectories[m.unique_id] = [start_pos]
 
-        # 2) 海盗 —— 按你说的范围生成：x 150~300, y 0~75
+        # 2) 海盗 —— 按你说的范围生成：x 200~300, y 0~75
         for i in range(num_pirates):
-            home_x = random.uniform(150, width)       # width=300 → 150~300
+            home_x = random.uniform(200, width)       # width=300 → 200~300
             home_y = random.uniform(0, 75)            # 0~75
             home = (home_x, home_y)
             p = PirateAgent(f"pirate_{i}", self, home_anchor=home,
@@ -937,7 +940,7 @@ class NavalSimModel(Model):
 # 模拟 + 画图
 # ============================================================
 def run_and_plot(steps=400):
-    model = NavalSimModel(num_pirates=6, num_merchants=9, num_navy=9,
+    model = NavalSimModel(num_pirates=9, num_merchants=6, num_navy=1,
                           width=300, height=200,
                           hours_per_step=1/6)
     
