@@ -111,8 +111,8 @@ class MerchantAgent(Agent):
         y_max = getattr(self.model.space, 'y_max', 1000)
 
         # 钳制新位置，确保它不会超出 [0, max] 范围
-        clamped_x = max(0.0, min(new_pos[0], x_max))
-        clamped_y = max(0.0, min(new_pos[1], y_max))
+        clamped_x = max(0.0, min(new_pos[0], x_max - 1e-3))
+        clamped_y = max(0.0, min(new_pos[1], y_max - 1e-3))
 
         final_pos = (clamped_x, clamped_y)
         # ----------------------
@@ -277,7 +277,7 @@ class PirateAgent(Agent):
             cruising_speed_kn=10,
             pursuit_speed_kn=28,
             max_sailing_steps=100,
-            visibility_nm=80,
+            visibility_nm=150,
             attack_time_hrs=0.5,
             cool_down_hrs=2,
             navy_knowledge_prob=0.4,
@@ -478,7 +478,7 @@ class PirateAgent(Agent):
             for agent in self.model.schedule.agents:
                 if agent.__class__.__name__ == "NavyAgent" and agent.pos is not None:
                     dnavy = distance(self.pos, agent.pos)
-                    if dnavy < 0.5*self.visibility:
+                    if dnavy < 0.2*self.visibility:
                         print(f"⚓ Pirate {self.unique_id} spotted Navy during attack! Retreating!")
                         self._trigger_return(reason="navy_during_attack")
                         return
@@ -725,7 +725,7 @@ class NavyAgent(Agent):
 class NavalSimModel(Model):
     def __init__(self,
                  width=300, height=200,
-                 num_pirates=3,
+                 num_pirates=9,
                  num_merchants=6,
                  num_navy=1,
                  hours_per_step=1/6):
@@ -752,11 +752,11 @@ class NavalSimModel(Model):
         port_A = (20, 20)
         port_B = (width - 20, height - 20)
         point_navy = (135, 120)
-        point_parit = (175, 75)
+        point_pirate = (175, 75)
         routes = [
             [port_A, port_B],
             [port_A, point_navy, port_B],
-            [port_A, point_parit, port_B],
+            [port_A, point_pirate, port_B],
         ]
         self.ports = [port_A, port_B]
 
@@ -878,12 +878,12 @@ class NavalSimModel(Model):
 
                 density_grid[(x, y)] = density
 
-        self.merchant_density_grid = density_grid        
+        self.merchant_density_grid = density_grid
     
 # ============================================================
 # 模拟 + 画图
 # ============================================================
-def run_and_plot(steps=200):
+def run_and_plot(steps=400):
     model = NavalSimModel(num_pirates=3, num_merchants=6, num_navy=1,
                           width=300, height=200,
                           hours_per_step=1/6)
@@ -948,7 +948,7 @@ def run_and_plot(steps=200):
 
     plt.tight_layout()
     plt.show()
-def run_and_animate(steps=200, interval=100):
+def run_and_animate(steps=400, interval=100):
     global ani
 
     model = NavalSimModel(num_pirates=3, num_merchants=6, num_navy=1,
@@ -1028,7 +1028,7 @@ def run_and_animate(steps=200, interval=100):
 
 if __name__ == "__main__":
     # 想要静态图
-    run_and_plot(steps=250)
+    run_and_plot(steps=400)
 
     # 想要动画
     # run_and_animate(steps=250, interval=120)
