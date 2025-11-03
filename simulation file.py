@@ -1,3 +1,4 @@
+import random
 # experiment_runner.py
 """
 批量跑海盗-商船-海军仿真，用来回答 3.1 / 3.2 / 3.3 三个研究问题。
@@ -20,8 +21,10 @@ def run_one_simulation(
     num_merchants=6,
     num_navy=1,
     mode="open",
-    speed_choices=None,
+    evasion_choices=None,     # ← 只控制“逃逸速度”
     alert_choices=None,
+    baseline_evasion=None,  # ← 新增：给所有船固定一个基线逃逸速度
+    baseline_alert=None,  # ← 新增：给所有船固定一个基线警戒度
 ):
     """
     跑一次仿真，返回一个 dict，里面有本次的所有指标
@@ -50,21 +53,61 @@ def run_one_simulation(
         corridor = [port_A, point_pirate, port_B]
         for m in model.merchant_agents:
             m.route = corridor
+    if mode == "mixed":
+        # 分散航道：给每艘船随机一条不同的/更绕的路线
+        port_A = (20, 20)
+        port_B = (model.space.x_max - 20, model.space.y_max - 20)
+        point_navy = (135, 120)
+        point_pirate = (175, 75)
+
+        candidate_routes = [
+            [port_A, port_B],
+            [port_A, point_navy, port_B],
+            [port_A, point_pirate, port_B],
+        ]
+        for m in model.merchant_agents:
+            # ⚠️ 这里要用 random.choice，不能用 np.random.choice
+            route = random.choice(candidate_routes)
+            # 拷一份，别所有船共用同一个 list
+            m.route = list(route)
 
     # 如果要做“速度/警觉性”实验，就覆盖商船属性
-    if speed_choices is not None or alert_choices is not None:
-        for m in model.merchant_agents:
-            if speed_choices is not None:
-                m.normal_speed = float(np.random.choice(speed_choices))
-            if alert_choices is not None:
-                m.alert_param = float(np.random.choice(alert_choices))
+    ship_records = {}
+    for m in model.merchant_agents:
+        # 基线逃逸速度
+        if baseline_evasion is not None:
+            if hasattr(m, "evasion_speed"):
+                m.evasion_speed = float(baseline_evasion)
+            elif hasattr(m, "evasion_speed_kn"):
+                m.evasion_speed_kn = float(baseline_evasion)
+        # 基线警戒度
+        if baseline_alert is not None:
+            m.alert_param = float(baseline_alert)
 
-    # 跑指定步数
+        # 随机覆盖（若给了 choices）
+        if evasion_choices is not None:
+            v = float(np.random.choice(evasion_choices))
+            if hasattr(m, "evasion_speed"):
+                m.evasion_speed = v
+            elif hasattr(m, "evasion_speed_kn"):
+                m.evasion_speed_kn = v
+        if alert_choices is not None:
+            a = float(np.random.choice(alert_choices))
+            m.alert_param = a
+
+        ship_records[m.unique_id] = {
+            "merchant_id": m.unique_id,
+            "evasion_speed": float(getattr(m, "evasion_speed",
+                                           getattr(m, "evasion_speed_kn", 0.0))),
+            "alert": float(getattr(m, "alert_param", 0.0)),
+        }
+
+    # —— 跑模拟 —— #
     for _ in range(steps):
         model.step()
 
-    # -------------------- 指标收集 --------------------
-    events = model.events  # 列表，里面有 HIJACK / DISRUPT / PIRATE_BOUNCED:contentReference[oaicite:3]{index=3}
+    # —— 指标&逐船 —— #
+    events = model.events
     hijacks = [e for e in events if e[0] == "HIJACK"]
     disrupts = [e for e in events if e[0] == "DISRUPT"]
     attempts = [e for e in events if e[0] in ("HIJACK", "DISRUPT")]
@@ -72,10 +115,16 @@ def run_one_simulation(
     hijack_count = len(hijacks)
     disrupt_count = len(disrupts)
     attempt_count = len(attempts)
-
     hijack_rate = hijack_count / attempt_count if attempt_count > 0 else 0.0
 
-    # 场景信息
+    hijacked_ids = {e[2] for e in hijacks}
+    per_ship = [{
+        "merchant_id": mid,
+        "evasion_speed": rec["evasion_speed"],
+        "alert": rec["alert"],
+        "hijacked": 1 if mid in hijacked_ids else 0,
+    } for mid, rec in ship_records.items()]
+
     return {
         "steps": steps,
         "num_pirates": num_pirates,
@@ -86,22 +135,21 @@ def run_one_simulation(
         "disrupt_count": disrupt_count,
         "attempt_count": attempt_count,
         "hijack_rate": hijack_rate,
-        # 原始事件也给出去，方便做空间分析
         "events": events,
+        "per_ship": per_ship,
     }
-
 
 def write_csv(path, fieldnames, rows):
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    # 写入数据
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for r in rows:
             writer.writerow(r)
 
-
 # =============== 实验 1：航道集中度 ===============
-def experiment_channel(num_runs=30):
+def experiment_channel(num_runs=100):
     rows = []
     for mode in ["open", "mixed"]:
         for i in range(num_runs):
@@ -128,13 +176,13 @@ def experiment_channel(num_runs=30):
 
 
 # =============== 实验 2：海军数量 ===============
-def experiment_navy(num_runs=30):
+def experiment_navy(num_runs=100):
     rows = []
     for navy in [0, 1, 2, 3]:
         for i in range(num_runs):
             res = run_one_simulation(
-                steps=250,
-                num_pirates=3,
+                steps=400,
+                num_pirates=9,
                 num_merchants=6,
                 num_navy=navy,
                 mode="open",   # 固定用集中航道，容易看出海军效果
@@ -155,56 +203,75 @@ def experiment_navy(num_runs=30):
 
 
 # =============== 实验 3：船速 & 警觉性（做 logistic 用） ===============
-def experiment_ship_features(num_runs=20):
-    """
-    这里我们要输出“船级别”的表，而不是场景级别的。
-    每跑一次，把这一轮里所有商船的特征都展开一遍。
-    """
+def experiment_evasion_only(num_runs=20):
     rows = []
-    speed_choices = [8, 10, 12, 14, 16]
-    alert_choices = [0.01, 0.03, 0.05]
+    evasion_choices = [14, 16, 18, 20, 22]  # 你要考察的速度档
+    baseline_alert = 0.0                   # 固定警戒度
 
     for i in range(num_runs):
         res = run_one_simulation(
-            steps=250,
-            num_pirates=3,
+            steps=400,
+            num_pirates=9,
             num_merchants=6,
             num_navy=1,
-            mode="mixed",
-            speed_choices=speed_choices,
-            alert_choices=alert_choices,
+            mode="open",
+            evasion_choices=evasion_choices,   # ← 只随机速度
+            alert_choices=None,                # ← 不随机警戒度
+            baseline_alert=baseline_alert,     # ← 全部同一基线警戒
         )
-        events = res["events"]
-        hijacked_ships = {e[2] for e in events if e[0] == "HIJACK"}  # e[2] 是 merchant_id:contentReference[oaicite:4]{index=4}
-
-        # 这里要注意：被劫持的商船已经从 model.merchant_agents 里删掉了，
-        # 所以我们不能只看 model.merchant_agents，要在 run_one_simulation 里补一份“初始商船表”才是最严谨的。
-        # 简化起见，这里只看仍在场上的；被删掉的我们单独加一行。
-        model = NavalSimModel(num_pirates=0)  # 占个位用不到
-        # 实际上，上面的 res 没有把 model 返回来，如果你想拉出完整船表，
-        # 可以把 run_one_simulation 改成同时返回 model；这里先用简化方式。
-
-        # 简化方式：只记录这次事件里出现过的船
-        for m_id in hijacked_ships:
+        for row in res["per_ship"]:
             rows.append({
-                "exp": "ship_features",
+                "exp": "evasion_only",
                 "run": i,
-                "merchant_id": m_id,
-                "speed": "unknown",     # 如果你想要真实速度，就要在 run_one_simulation 里把 ship attrs 一起返回
-                "alert": "unknown",
-                "hijacked": 1,
+                "merchant_id": row["merchant_id"],
+                "evasion_speed": row["evasion_speed"],
+                "alert": baseline_alert,
+                "hijacked": row["hijacked"],
             })
 
-        # 实际更完整的做法：在 run_one_simulation 里，把每艘船的 speed/alert 存入 list 一起 return
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    write_csv(
+        f"results/exp3_evasion_only_{ts}.csv",
+        ["exp", "run", "merchant_id", "evasion_speed", "alert", "hijacked"],
+        rows
+    )
+
+def experiment_alert_only(num_runs=20):
+    rows = []
+    alert_choices    = [0.01, 0.03, 0.05]  # 你要考察的警戒档
+    baseline_evasion = 18                  # 固定逃逸速度（单位与模型一致）
+
+    for i in range(num_runs):
+        res = run_one_simulation(
+            steps=400,
+            num_pirates=9,
+            num_merchants=6,
+            num_navy=1,
+            mode="open",
+            evasion_choices=None,              # ← 不随机速度
+            alert_choices=alert_choices,       # ← 只随机警戒度
+            baseline_evasion=baseline_evasion, # ← 全部同一基线速度
+        )
+        for row in res["per_ship"]:
+            rows.append({
+                "exp": "alert_only",
+                "run": i,
+                "merchant_id": row["merchant_id"],
+                "evasion_speed": baseline_evasion,
+                "alert": row["alert"],
+                "hijacked": row["hijacked"],
+            })
 
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    write_csv(f"results/exp3_shipfeatures_{ts}.csv",
-              ["exp", "run", "merchant_id", "speed", "alert", "hijacked"],
-              rows)
-
+    write_csv(
+        f"results/exp4_alert_only_{ts}.csv",
+        ["exp", "run", "merchant_id", "evasion_speed", "alert", "hijacked"],
+        rows
+    )
 
 if __name__ == "__main__":
     # 你可以按需打开
-    experiment_channel(num_runs=100)
-    # experiment_navy(num_runs=30)
-    # experiment_ship_features(num_runs=20)
+    # experiment_channel(num_runs=100)
+    # experiment_navy(num_runs=100)
+    experiment_evasion_only(num_runs=20)
+    # experiment_alert_only(num_runs=20)
